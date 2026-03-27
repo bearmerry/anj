@@ -1,4 +1,5 @@
 import csv
+import os
 import queue
 import random
 import re
@@ -10,6 +11,7 @@ from urllib.parse import quote
 
 import requests
 from bs4 import BeautifulSoup
+from openpyxl import Workbook
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
@@ -150,7 +152,7 @@ class AppUI:
         self.keyword_var = tk.StringVar(value="")
         self.pages_var = tk.IntVar(value=2)
         self.delay_var = tk.DoubleVar(value=1.2)
-        self.output_var = tk.StringVar(value="anjuke_prices.csv")
+        self.output_var = tk.StringVar(value="anjuke_prices.xlsx")
 
         self._build_form()
         self._build_table()
@@ -173,7 +175,7 @@ class AppUI:
         ttk.Label(frm, text="间隔秒数").grid(row=0, column=6, padx=6, pady=8, sticky=tk.W)
         ttk.Spinbox(frm, from_=0.2, to=10, increment=0.2, textvariable=self.delay_var, width=8).grid(row=0, column=7, padx=6, pady=8)
 
-        ttk.Label(frm, text="输出 CSV").grid(row=1, column=0, padx=6, pady=8, sticky=tk.W)
+        ttk.Label(frm, text="输出文件").grid(row=1, column=0, padx=6, pady=8, sticky=tk.W)
         ttk.Entry(frm, textvariable=self.output_var, width=52).grid(row=1, column=1, columnspan=4, padx=6, pady=8, sticky=tk.EW)
         ttk.Button(frm, text="选择", command=self.choose_output).grid(row=1, column=5, padx=6, pady=8)
 
@@ -211,8 +213,12 @@ class AppUI:
     def choose_output(self):
         path = filedialog.asksaveasfilename(
             title="选择导出文件",
-            defaultextension=".csv",
-            filetypes=[("CSV 文件", "*.csv"), ("所有文件", "*.*")],
+            defaultextension=".xlsx",
+            filetypes=[
+                ("Excel 文件", "*.xlsx"),
+                ("CSV 文件", "*.csv"),
+                ("所有文件", "*.*"),
+            ],
         )
         if path:
             self.output_var.set(path)
@@ -273,6 +279,37 @@ class AppUI:
             for item in items:
                 writer.writerow(asdict(item))
 
+    def _save_excel(self, items: List[HouseItem], path: str):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "anjuke_prices"
+        headers = ["title", "community", "district", "total_price_wan", "unit_price_yuan", "detail_url"]
+        sheet.append(headers)
+        for item in items:
+            sheet.append(
+                [
+                    item.title,
+                    item.community,
+                    item.district,
+                    item.total_price_wan,
+                    item.unit_price_yuan,
+                    item.detail_url,
+                ]
+            )
+        workbook.save(path)
+
+    def _save_output(self, items: List[HouseItem], path: str):
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".xlsx":
+            self._save_excel(items, path)
+            return
+        self._save_csv(items, path)
+
+    @staticmethod
+    def _to_file_link(path: str) -> str:
+        full_path = os.path.abspath(path)
+        return f"file://{quote(full_path)}"
+
     def start_crawl(self):
         if self.running:
             return
@@ -289,7 +326,7 @@ class AppUI:
         pages = max(1, int(self.pages_var.get()))
         delay = max(0.2, float(self.delay_var.get()))
         keyword = self.keyword_var.get().strip()
-        output_file = self.output_var.get().strip() or "anjuke_prices.csv"
+        output_file = self.output_var.get().strip() or "anjuke_prices.xlsx"
 
         def worker():
             try:
@@ -297,8 +334,10 @@ class AppUI:
                 scraper = AnjukeScraper(city=city, keyword=keyword)
                 items = scraper.crawl(max_pages=pages, delay_seconds=delay, log=self.log)
                 self.msg_queue.put(("result", items))
-                self._save_csv(items, output_file)
-                self.msg_queue.put(("done", f"抓取完成，共 {len(items)} 条。已保存到：{output_file}"))
+                self._save_output(items, output_file)
+                file_link = self._to_file_link(output_file)
+                self.log(f"Excel 下载链接（本地）：{file_link}")
+                self.msg_queue.put(("done", f"抓取完成，共 {len(items)} 条。已保存到：{output_file}\n下载链接：{file_link}"))
             except Exception as e:
                 self.msg_queue.put(("done", f"执行失败：{e}"))
 
