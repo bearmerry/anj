@@ -125,9 +125,30 @@ class AnjukeScraper:
 
     @staticmethod
     def _looks_like_blocked(html: str) -> bool:
-        blocked_markers = ["访问验证", "人机验证", "安全验证", "captcha", "forbidden", "waf"]
-        lower_html = html.lower()
-        return any(marker.lower() in lower_html for marker in blocked_markers)
+        soup = BeautifulSoup(html, "html.parser")
+        page_text = soup.get_text(" ", strip=True)
+        title_text = soup.title.get_text(" ", strip=True) if soup.title else ""
+        combined = f"{title_text} {page_text}".lower()
+
+        blocked_markers = [
+            "访问验证",
+            "人机验证",
+            "安全验证",
+            "行为验证",
+            "异常访问",
+            "请输入验证码",
+            "滑动验证",
+            "captcha",
+        ]
+        marker_hit = any(marker.lower() in combined for marker in blocked_markers)
+
+        captcha_dom_hit = bool(
+            soup.select_one(
+                "#captcha, .captcha, #nc_1_n1z, .verify-code, .geetest_panel, iframe[src*='captcha']"
+            )
+        )
+        has_listing_nodes = bool(soup.select("div.property, li.list-item"))
+        return (marker_hit or captcha_dom_hit) and not has_listing_nodes
 
     def _fetch_html(self, page: int, log) -> Optional[str]:
         base_headers = {
@@ -140,19 +161,24 @@ class AnjukeScraper:
 
         last_error = None
         for url in self._build_url_candidates(page):
-            headers = dict(base_headers)
-            headers["User-Agent"] = random.choice(USER_AGENTS)
-            try:
-                resp = self.session.get(url, headers=headers, timeout=self.timeout)
-                resp.raise_for_status()
-                html = resp.text
-                if self._looks_like_blocked(html):
-                    log(f"第 {page} 页命中风控页面：{url}")
+            for attempt in range(1, 4):
+                headers = dict(base_headers)
+                headers["User-Agent"] = random.choice(USER_AGENTS)
+                try:
+                    resp = self.session.get(url, headers=headers, timeout=self.timeout)
+                    resp.raise_for_status()
+                    html = resp.text
+                    if self._looks_like_blocked(html):
+                        log(f"第 {page} 页疑似命中风控（第 {attempt}/3 次）：{url}")
+                        self.session = requests.Session()
+                        time.sleep(1.0 + random.uniform(0.6, 1.8))
+                        continue
+                    return html
+                except Exception as e:
+                    last_error = e
+                    log(f"第 {page} 页请求失败（{url}，第 {attempt}/3 次）：{e}")
+                    time.sleep(0.8 + random.uniform(0.4, 1.2))
                     continue
-                return html
-            except Exception as e:
-                last_error = e
-                log(f"第 {page} 页请求失败（{url}）：{e}")
 
         if last_error:
             raise last_error
