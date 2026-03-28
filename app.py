@@ -6,7 +6,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass, asdict
-from typing import List
+from typing import List, Optional
 from urllib.parse import quote
 
 import requests
@@ -98,26 +98,65 @@ class AnjukeScraper:
         self.timeout = timeout
         self.session = requests.Session()
 
-    def _build_url(self, page: int) -> str:
+    def _build_url_candidates(self, page: int) -> List[str]:
         base = f"https://{self.city}.anjuke.com/sale/"
         params = []
         if self.keyword:
             params.append(f"kw={quote(self.keyword)}")
-        if page > 1:
-            params.append(f"p={page}")
-        if not params:
-            return base
-        return f"{base}?{'&'.join(params)}"
 
-    def _fetch_html(self, page: int) -> str:
-        headers = {
-            "User-Agent": random.choice(USER_AGENTS),
+        candidates = []
+
+        query_params = list(params)
+        if page > 1:
+            query_params.append(f"p={page}")
+        if query_params:
+            candidates.append(f"{base}?{'&'.join(query_params)}")
+        else:
+            candidates.append(base)
+
+        # 安居客部分城市分页为路径式：/sale/p2/
+        if page > 1:
+            path_url = f"{base}p{page}/"
+            if params:
+                path_url = f"{path_url}?{'&'.join(params)}"
+            candidates.append(path_url)
+
+        return candidates
+
+    @staticmethod
+    def _looks_like_blocked(html: str) -> bool:
+        blocked_markers = ["访问验证", "人机验证", "安全验证", "captcha", "forbidden", "waf"]
+        lower_html = html.lower()
+        return any(marker.lower() in lower_html for marker in blocked_markers)
+
+    def _fetch_html(self, page: int, log) -> Optional[str]:
+        base_headers = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
             "Referer": f"https://{self.city}.anjuke.com/",
         }
-        resp = self.session.get(self._build_url(page), headers=headers, timeout=self.timeout)
-        resp.raise_for_status()
-        return resp.text
+
+        last_error = None
+        for url in self._build_url_candidates(page):
+            headers = dict(base_headers)
+            headers["User-Agent"] = random.choice(USER_AGENTS)
+            try:
+                resp = self.session.get(url, headers=headers, timeout=self.timeout)
+                resp.raise_for_status()
+                html = resp.text
+                if self._looks_like_blocked(html):
+                    log(f"第 {page} 页命中风控页面：{url}")
+                    continue
+                return html
+            except Exception as e:
+                last_error = e
+                log(f"第 {page} 页请求失败（{url}）：{e}")
+
+        if last_error:
+            raise last_error
+        return None
 
     @staticmethod
     def _extract_text(element, selectors: List[str]) -> str:
@@ -179,18 +218,35 @@ class AnjukeScraper:
 
     def crawl(self, max_pages: int, delay_seconds: float, log) -> List[HouseItem]:
         all_items: List[HouseItem] = []
+        empty_pages = 0
+
         for page in range(1, max_pages + 1):
             log(f"正在抓取第 {page} 页...")
             try:
-                html = self._fetch_html(page)
+                html = self._fetch_html(page, log=log)
             except Exception as e:
                 log(f"第 {page} 页请求失败：{e}")
+                self.session = requests.Session()
+                time.sleep(delay_seconds + random.uniform(0.4, 1.2))
+                continue
+
+            if not html:
+                log(f"第 {page} 页响应为空")
                 continue
 
             items = self._parse_items(html)
             log(f"第 {page} 页解析到 {len(items)} 条记录")
             all_items.extend(items)
-            time.sleep(delay_seconds)
+
+            if items:
+                empty_pages = 0
+            else:
+                empty_pages += 1
+                if empty_pages >= 2:
+                    log("连续 2 页无数据，可能触发风控或到达结果末页，提前停止。")
+                    break
+
+            time.sleep(delay_seconds + random.uniform(0.3, 1.0))
 
         return all_items
 
