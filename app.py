@@ -22,6 +22,62 @@ USER_AGENTS = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36",
 ]
 
+# 常见城市中英文别名映射（可按需补充）
+CITY_ALIASES = {
+    "北京": "beijing",
+    "北京市": "beijing",
+    "beijing": "beijing",
+    "上海": "shanghai",
+    "上海市": "shanghai",
+    "shanghai": "shanghai",
+    "广州": "guangzhou",
+    "广州市": "guangzhou",
+    "guangzhou": "guangzhou",
+    "深圳": "shenzhen",
+    "深圳市": "shenzhen",
+    "shenzhen": "shenzhen",
+    "杭州": "hangzhou",
+    "杭州市": "hangzhou",
+    "hangzhou": "hangzhou",
+    "南京": "nanjing",
+    "南京市": "nanjing",
+    "nanjing": "nanjing",
+    "苏州": "suzhou",
+    "苏州市": "suzhou",
+    "suzhou": "suzhou",
+    "天津": "tianjin",
+    "天津市": "tianjin",
+    "tianjin": "tianjin",
+    "重庆": "chongqing",
+    "重庆市": "chongqing",
+    "chongqing": "chongqing",
+    "武汉": "wuhan",
+    "武汉市": "wuhan",
+    "wuhan": "wuhan",
+    "成都": "chengdu",
+    "成都市": "chengdu",
+    "chengdu": "chengdu",
+    "西安": "xian",
+    "西安市": "xian",
+    "xian": "xian",
+    "郑州": "zhengzhou",
+    "郑州市": "zhengzhou",
+    "zhengzhou": "zhengzhou",
+    "长沙": "changsha",
+    "长沙市": "changsha",
+    "changsha": "changsha",
+    "青岛": "qingdao",
+    "青岛市": "qingdao",
+    "qingdao": "qingdao",
+}
+
+
+def normalize_city(city: str) -> str:
+    value = city.strip().lower()
+    if not value:
+        return ""
+    return CITY_ALIASES.get(value, value)
+
 
 @dataclass
 class HouseItem:
@@ -37,7 +93,7 @@ class AnjukeScraper:
     """安居客二手房页面爬虫（仅做学习用途）。"""
 
     def __init__(self, city: str, keyword: str = "", timeout: int = 10):
-        self.city = city.strip().lower()
+        self.city = normalize_city(city)
         self.keyword = keyword.strip()
         self.timeout = timeout
         self.session = requests.Session()
@@ -316,7 +372,7 @@ class AppUI:
 
         city = self.city_var.get().strip()
         if not city:
-            messagebox.showerror("错误", "请输入城市拼音，例如 shanghai / beijing")
+            messagebox.showerror("错误", "请输入城市（支持中文或拼音），例如 上海 / shanghai")
             return
 
         self.running = True
@@ -331,7 +387,9 @@ class AppUI:
         def worker():
             try:
                 self.log("免责声明：请遵守网站 robots 与服务条款，控制抓取频率。")
-                scraper = AnjukeScraper(city=city, keyword=keyword)
+                city_slug = normalize_city(city)
+                self.log(f"城市输入：{city} -> 站点城市标识：{city_slug}")
+                scraper = AnjukeScraper(city=city_slug, keyword=keyword)
                 items = scraper.crawl(max_pages=pages, delay_seconds=delay, log=self.log)
                 self.msg_queue.put(("result", items))
                 self._save_output(items, output_file)
