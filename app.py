@@ -313,6 +313,12 @@ class AppUI:
         self.pages_var = tk.IntVar(value=2)
         self.delay_var = tk.DoubleVar(value=1.2)
         self.output_var = tk.StringVar(value="anjuke_prices.xlsx")
+        self.min_total_var = tk.StringVar(value="")
+        self.max_total_var = tk.StringVar(value="")
+        self.min_unit_var = tk.StringVar(value="")
+        self.max_unit_var = tk.StringVar(value="")
+        self.min_area_var = tk.StringVar(value="")
+        self.max_area_var = tk.StringVar(value="")
 
         self._build_form()
         self._build_table()
@@ -341,6 +347,21 @@ class AppUI:
 
         self.btn_start = ttk.Button(frm, text="开始抓取", command=self.start_crawl)
         self.btn_start.grid(row=1, column=7, padx=6, pady=8)
+
+        ttk.Label(frm, text="总价(万)").grid(row=2, column=0, padx=6, pady=8, sticky=tk.W)
+        ttk.Entry(frm, textvariable=self.min_total_var, width=8).grid(row=2, column=1, padx=(6, 2), pady=8, sticky=tk.W)
+        ttk.Label(frm, text="~").grid(row=2, column=1, padx=(66, 2), pady=8, sticky=tk.W)
+        ttk.Entry(frm, textvariable=self.max_total_var, width=8).grid(row=2, column=2, padx=(4, 6), pady=8, sticky=tk.W)
+
+        ttk.Label(frm, text="单价(元/平)").grid(row=2, column=3, padx=6, pady=8, sticky=tk.W)
+        ttk.Entry(frm, textvariable=self.min_unit_var, width=8).grid(row=2, column=4, padx=(6, 2), pady=8, sticky=tk.W)
+        ttk.Label(frm, text="~").grid(row=2, column=4, padx=(66, 2), pady=8, sticky=tk.W)
+        ttk.Entry(frm, textvariable=self.max_unit_var, width=8).grid(row=2, column=5, padx=(4, 6), pady=8, sticky=tk.W)
+
+        ttk.Label(frm, text="面积(㎡)").grid(row=2, column=6, padx=6, pady=8, sticky=tk.W)
+        ttk.Entry(frm, textvariable=self.min_area_var, width=8).grid(row=2, column=7, padx=(6, 2), pady=8, sticky=tk.W)
+        ttk.Label(frm, text="~").grid(row=2, column=7, padx=(66, 2), pady=8, sticky=tk.W)
+        ttk.Entry(frm, textvariable=self.max_area_var, width=8).grid(row=2, column=8, padx=(4, 6), pady=8, sticky=tk.W)
 
     def _build_table(self):
         table_frame = ttk.LabelFrame(self.root, text="结果预览")
@@ -489,6 +510,46 @@ class AppUI:
         full_path = os.path.abspath(path)
         return f"file://{quote(full_path)}"
 
+    @staticmethod
+    def _to_float(value: str):
+        text = value.strip()
+        if not text:
+            return None
+        return float(text)
+
+    @staticmethod
+    def _in_range(value: str, low, high) -> bool:
+        if low is None and high is None:
+            return True
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return False
+        if low is not None and number < low:
+            return False
+        if high is not None and number > high:
+            return False
+        return True
+
+    def _apply_filters(self, items: List[HouseItem]):
+        total_min = self._to_float(self.min_total_var.get())
+        total_max = self._to_float(self.max_total_var.get())
+        unit_min = self._to_float(self.min_unit_var.get())
+        unit_max = self._to_float(self.max_unit_var.get())
+        area_min = self._to_float(self.min_area_var.get())
+        area_max = self._to_float(self.max_area_var.get())
+
+        filtered = []
+        for item in items:
+            if not self._in_range(item.total_price_wan, total_min, total_max):
+                continue
+            if not self._in_range(item.unit_price_yuan, unit_min, unit_max):
+                continue
+            if not self._in_range(item.area_sqm, area_min, area_max):
+                continue
+            filtered.append(item)
+        return filtered
+
     def start_crawl(self):
         if self.running:
             return
@@ -506,6 +567,18 @@ class AppUI:
         delay = max(0.2, float(self.delay_var.get()))
         keyword = self.keyword_var.get().strip()
         output_file = self.output_var.get().strip() or "anjuke_prices.xlsx"
+        try:
+            self._to_float(self.min_total_var.get() or "")
+            self._to_float(self.max_total_var.get() or "")
+            self._to_float(self.min_unit_var.get() or "")
+            self._to_float(self.max_unit_var.get() or "")
+            self._to_float(self.min_area_var.get() or "")
+            self._to_float(self.max_area_var.get() or "")
+        except ValueError:
+            self.running = False
+            self.btn_start.config(state=tk.NORMAL)
+            messagebox.showerror("错误", "过滤条件请输入数字，留空表示不限。")
+            return
 
         def worker():
             try:
@@ -514,11 +587,13 @@ class AppUI:
                 self.log(f"城市输入：{city} -> 站点城市标识：{city_slug}")
                 scraper = AnjukeScraper(city=city_slug, keyword=keyword)
                 items = scraper.crawl(max_pages=pages, delay_seconds=delay, log=self.log)
-                self.msg_queue.put(("result", items))
-                self._save_output(items, output_file)
+                filtered_items = self._apply_filters(items)
+                self.log(f"过滤前 {len(items)} 条，过滤后 {len(filtered_items)} 条")
+                self.msg_queue.put(("result", filtered_items))
+                self._save_output(filtered_items, output_file)
                 file_link = self._to_file_link(output_file)
                 self.log(f"Excel 下载链接（本地）：{file_link}")
-                self.msg_queue.put(("done", f"抓取完成，共 {len(items)} 条。已保存到：{output_file}\n下载链接：{file_link}"))
+                self.msg_queue.put(("done", f"抓取完成，共 {len(filtered_items)} 条。已保存到：{output_file}\n下载链接：{file_link}"))
             except Exception as e:
                 self.msg_queue.put(("done", f"执行失败：{e}"))
 
