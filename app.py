@@ -84,6 +84,8 @@ class HouseItem:
     title: str
     community: str
     district: str
+    house_info: str
+    area_sqm: str
     total_price_wan: str
     unit_price_yuan: str
     detail_url: str
@@ -204,6 +206,13 @@ class AnjukeScraper:
             unit = unit_match.group(1)
         return total, unit
 
+    @staticmethod
+    def _extract_area_from_text(text: str) -> str:
+        area_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:㎡|m²|平米|平方)", text, flags=re.IGNORECASE)
+        if area_match:
+            return area_match.group(1)
+        return ""
+
     def _parse_items(self, html: str) -> List[HouseItem]:
         soup = BeautifulSoup(html, "html.parser")
         containers = soup.select("div.property")
@@ -216,24 +225,37 @@ class AnjukeScraper:
             title = self._extract_text(c, ["h3", "a.property-content-title-name", "a.house-title"])
             community = self._extract_text(c, [".property-content-info-comm-name", ".comm-address", ".property-content-info-text"])
             district = self._extract_text(c, [".property-content-info-comm-address", ".property-content-info-text:nth-of-type(2)"])
+            house_info = self._extract_text(
+                c,
+                [
+                    ".property-content-info",
+                    ".property-content-info-text.property-content-info-attribute",
+                    ".details-item",
+                    ".tags",
+                ],
+            )
             price_text = self._extract_text(c, [".property-price", ".pro-price", ".price"])
+            full_text = c.get_text(" ", strip=True)
             total, unit = self._extract_price_from_text(price_text)
+            area = self._extract_area_from_text(house_info)
             if not unit:
-                full_text = c.get_text(" ", strip=True)
                 _, unit = self._extract_price_from_text(full_text)
             if not total:
-                full_text = c.get_text(" ", strip=True)
                 total, _ = self._extract_price_from_text(full_text)
+            if not area:
+                area = self._extract_area_from_text(full_text)
 
             link = c.select_one("a[href]")
             detail_url = link.get("href", "") if link else ""
 
-            if title or total or unit:
+            if title or total or unit or area:
                 result.append(
                     HouseItem(
                         title=title,
                         community=community,
                         district=district,
+                        house_info=house_info,
+                        area_sqm=area,
                         total_price_wan=total,
                         unit_price_yuan=unit,
                         detail_url=detail_url,
@@ -324,16 +346,20 @@ class AppUI:
         table_frame = ttk.LabelFrame(self.root, text="结果预览")
         table_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=8)
 
-        columns = ("title", "community", "district", "total", "unit")
+        columns = ("title", "community", "district", "house_info", "area", "total", "unit")
         self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=12)
         self.tree.heading("title", text="标题")
         self.tree.heading("community", text="小区")
         self.tree.heading("district", text="区域")
+        self.tree.heading("house_info", text="房源信息")
+        self.tree.heading("area", text="面积(㎡)")
         self.tree.heading("total", text="总价(万)")
         self.tree.heading("unit", text="单价(元/平)")
-        self.tree.column("title", width=280)
-        self.tree.column("community", width=180)
-        self.tree.column("district", width=150)
+        self.tree.column("title", width=220)
+        self.tree.column("community", width=140)
+        self.tree.column("district", width=130)
+        self.tree.column("house_info", width=210)
+        self.tree.column("area", width=90, anchor=tk.CENTER)
         self.tree.column("total", width=90, anchor=tk.CENTER)
         self.tree.column("unit", width=110, anchor=tk.CENTER)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -395,6 +421,8 @@ class AppUI:
                     item.title,
                     item.community,
                     item.district,
+                    item.house_info,
+                    item.area_sqm,
                     item.total_price_wan,
                     item.unit_price_yuan,
                 ),
@@ -408,6 +436,8 @@ class AppUI:
                     "title",
                     "community",
                     "district",
+                    "house_info",
+                    "area_sqm",
                     "total_price_wan",
                     "unit_price_yuan",
                     "detail_url",
@@ -421,7 +451,16 @@ class AppUI:
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = "anjuke_prices"
-        headers = ["title", "community", "district", "total_price_wan", "unit_price_yuan", "detail_url"]
+        headers = [
+            "title",
+            "community",
+            "district",
+            "house_info",
+            "area_sqm",
+            "total_price_wan",
+            "unit_price_yuan",
+            "detail_url",
+        ]
         sheet.append(headers)
         for item in items:
             sheet.append(
@@ -429,6 +468,8 @@ class AppUI:
                     item.title,
                     item.community,
                     item.district,
+                    item.house_info,
+                    item.area_sqm,
                     item.total_price_wan,
                     item.unit_price_yuan,
                     item.detail_url,
