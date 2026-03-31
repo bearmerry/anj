@@ -198,12 +198,18 @@ class AnjukeScraper:
     def _extract_price_from_text(text: str):
         total = ""
         unit = ""
-        total_match = re.search(r"(\d+(?:\.\d+)?)\s*万", text)
-        unit_match = re.search(r"(\d{3,6})\s*元/平", text)
+        normalized = text.replace(",", "").replace("，", "")
+        total_match = re.search(r"(\d+(?:\.\d+)?)\s*万", normalized)
+        unit_match = re.search(
+            r"(\d+(?:\.\d+)?)\s*元\s*/\s*(?:平(?:方米)?|㎡|m²|m2)",
+            normalized,
+            flags=re.IGNORECASE,
+        )
         if total_match:
             total = total_match.group(1)
         if unit_match:
-            unit = unit_match.group(1)
+            unit_value = unit_match.group(1)
+            unit = unit_value[:-2] if unit_value.endswith(".0") else unit_value
         return total, unit
 
     @staticmethod
