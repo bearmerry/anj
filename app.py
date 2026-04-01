@@ -6,7 +6,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass, asdict
-from typing import List, Optional
+from typing import Callable, List, Optional
 from urllib.parse import quote
 
 import requests
@@ -152,7 +152,20 @@ class AnjukeScraper:
         has_listing_nodes = bool(soup.select("div.property, li.list-item"))
         return (marker_hit or captcha_dom_hit) and not has_listing_nodes
 
-    def _fetch_html(self, page: int, log) -> Optional[str]:
+    @staticmethod
+    def _interruptible_sleep(seconds: float, should_stop: Optional[Callable[[], bool]] = None):
+        if seconds <= 0:
+            return
+        if not should_stop:
+            time.sleep(seconds)
+            return
+        end_time = time.time() + seconds
+        while time.time() < end_time:
+            if should_stop():
+                return
+            time.sleep(0.1)
+
+    def _fetch_html(self, page: int, log, should_stop: Optional[Callable[[], bool]] = None) -> Optional[str]:
         base_headers = {
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
@@ -164,6 +177,9 @@ class AnjukeScraper:
         last_error = None
         for url in self._build_url_candidates(page):
             for attempt in range(1, 4):
+                if should_stop and should_stop():
+                    log("检测到停止请求，结束当前抓取。")
+                    return None
                 headers = dict(base_headers)
                 headers["User-Agent"] = random.choice(USER_AGENTS)
                 try:
@@ -173,13 +189,13 @@ class AnjukeScraper:
                     if self._looks_like_blocked(html):
                         log(f"第 {page} 页疑似命中风控（第 {attempt}/3 次）：{url}")
                         self.session = requests.Session()
-                        time.sleep(1.0 + random.uniform(0.6, 1.8))
+                        self._interruptible_sleep(1.0 + random.uniform(0.6, 1.8), should_stop=should_stop)
                         continue
                     return html
                 except Exception as e:
                     last_error = e
                     log(f"第 {page} 页请求失败（{url}，第 {attempt}/3 次）：{e}")
-                    time.sleep(0.8 + random.uniform(0.4, 1.2))
+                    self._interruptible_sleep(0.8 + random.uniform(0.4, 1.2), should_stop=should_stop)
                     continue
 
         if last_error:
@@ -270,18 +286,28 @@ class AnjukeScraper:
 
         return result
 
-    def crawl(self, max_pages: int, delay_seconds: float, log) -> List[HouseItem]:
+    def crawl(
+        self,
+        max_pages: int,
+        delay_seconds: float,
+        log,
+        should_stop: Optional[Callable[[], bool]] = None,
+        on_page_items: Optional[Callable[[List[HouseItem]], None]] = None,
+    ) -> List[HouseItem]:
         all_items: List[HouseItem] = []
         empty_pages = 0
 
         for page in range(1, max_pages + 1):
+            if should_stop and should_stop():
+                log("检测到停止请求，已中断后续页面抓取。")
+                break
             log(f"正在抓取第 {page} 页...")
             try:
-                html = self._fetch_html(page, log=log)
+                html = self._fetch_html(page, log=log, should_stop=should_stop)
             except Exception as e:
                 log(f"第 {page} 页请求失败：{e}")
                 self.session = requests.Session()
-                time.sleep(delay_seconds + random.uniform(0.4, 1.2))
+                self._interruptible_sleep(delay_seconds + random.uniform(0.4, 1.2), should_stop=should_stop)
                 continue
 
             if not html:
@@ -291,6 +317,8 @@ class AnjukeScraper:
             items = self._parse_items(html)
             log(f"第 {page} 页解析到 {len(items)} 条记录")
             all_items.extend(items)
+            if on_page_items:
+                on_page_items(all_items)
 
             if items:
                 empty_pages = 0
@@ -300,7 +328,7 @@ class AnjukeScraper:
                     log("连续 2 页无数据，可能触发风控或到达结果末页，提前停止。")
                     break
 
-            time.sleep(delay_seconds + random.uniform(0.3, 1.0))
+            self._interruptible_sleep(delay_seconds + random.uniform(0.3, 1.0), should_stop=should_stop)
 
         return all_items
 
@@ -313,6 +341,7 @@ class AppUI:
 
         self.msg_queue = queue.Queue()
         self.running = False
+        self.stop_event = threading.Event()
 
         self.city_var = tk.StringVar(value="shanghai")
         self.keyword_var = tk.StringVar(value="")
@@ -353,6 +382,8 @@ class AppUI:
 
         self.btn_start = ttk.Button(frm, text="开始抓取", command=self.start_crawl)
         self.btn_start.grid(row=1, column=7, padx=6, pady=8)
+        self.btn_stop = ttk.Button(frm, text="停止抓取", command=self.stop_crawl, state=tk.DISABLED)
+        self.btn_stop.grid(row=1, column=8, padx=6, pady=8)
 
         ttk.Label(frm, text="总价(万)").grid(row=2, column=0, padx=6, pady=8, sticky=tk.W)
         ttk.Entry(frm, textvariable=self.min_total_var, width=8).grid(row=2, column=1, padx=(6, 2), pady=8, sticky=tk.W)
@@ -428,7 +459,9 @@ class AppUI:
                     self._show_result(payload)
                 elif kind == "done":
                     self.running = False
+                    self.stop_event.clear()
                     self.btn_start.config(state=tk.NORMAL)
+                    self.btn_stop.config(state=tk.DISABLED)
                     if payload:
                         messagebox.showinfo("完成", payload)
         except queue.Empty:
@@ -566,7 +599,9 @@ class AppUI:
             return
 
         self.running = True
+        self.stop_event.clear()
         self.btn_start.config(state=tk.DISABLED)
+        self.btn_stop.config(state=tk.NORMAL)
         self.log_text.delete("1.0", tk.END)
 
         pages = max(1, int(self.pages_var.get()))
@@ -592,18 +627,32 @@ class AppUI:
                 city_slug = normalize_city(city)
                 self.log(f"城市输入：{city} -> 站点城市标识：{city_slug}")
                 scraper = AnjukeScraper(city=city_slug, keyword=keyword)
-                items = scraper.crawl(max_pages=pages, delay_seconds=delay, log=self.log)
+                items = scraper.crawl(
+                    max_pages=pages,
+                    delay_seconds=delay,
+                    log=self.log,
+                    should_stop=self.stop_event.is_set,
+                    on_page_items=lambda new_items: self.msg_queue.put(("result", self._apply_filters(new_items))),
+                )
                 filtered_items = self._apply_filters(items)
                 self.log(f"过滤前 {len(items)} 条，过滤后 {len(filtered_items)} 条")
                 self.msg_queue.put(("result", filtered_items))
                 self._save_output(filtered_items, output_file)
                 file_link = self._to_file_link(output_file)
                 self.log(f"Excel 下载链接（本地）：{file_link}")
-                self.msg_queue.put(("done", f"抓取完成，共 {len(filtered_items)} 条。已保存到：{output_file}\n下载链接：{file_link}"))
+                done_msg = "抓取已手动停止" if self.stop_event.is_set() else "抓取完成"
+                self.msg_queue.put(("done", f"{done_msg}，共 {len(filtered_items)} 条。已保存到：{output_file}\n下载链接：{file_link}"))
             except Exception as e:
                 self.msg_queue.put(("done", f"执行失败：{e}"))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def stop_crawl(self):
+        if not self.running:
+            return
+        self.stop_event.set()
+        self.log("已收到停止指令：将保留当前结果并尽快结束抓取。")
+        self.btn_stop.config(state=tk.DISABLED)
 
 
 def main():
