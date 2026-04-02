@@ -243,6 +243,8 @@ class AnjukeScraper:
             ".property-content-info-text.property-content-info-attribute",
             ".details-item",
             ".property-content-info",
+            ".property-content-detail",
+            ".property-content",
         ]
 
         wanted_labels = ("发布人", "佣金", "房产公司")
@@ -263,6 +265,19 @@ class AnjukeScraper:
                         texts.append(seg)
             if texts:
                 return " | ".join(texts)
+
+        # 回退：有些页面不按分段展示，而是整块文本，使用正则提取指定字段
+        fallback_text = element.get_text(" ", strip=True)
+        normalized = re.sub(r"\s+", " ", fallback_text)
+        extracted = []
+        for label in wanted_labels:
+            # 例如：发布人: 张三 / 佣金：1.0% / 房产公司：某某地产
+            pattern = rf"{label}\s*[：:]\s*([^|｜/，,。;；]+)"
+            match = re.search(pattern, normalized)
+            if match:
+                extracted.append(f"{label}：{match.group(1).strip()}")
+        if extracted:
+            return " | ".join(extracted)
         return ""
 
     def _parse_items(self, html: str) -> List[HouseItem]:
