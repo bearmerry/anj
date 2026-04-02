@@ -85,6 +85,7 @@ class HouseItem:
     community: str
     district: str
     house_info: str
+    overview: str
     area_sqm: str
     total_price_wan: str
     unit_price_yuan: str
@@ -235,6 +236,21 @@ class AnjukeScraper:
             return area_match.group(1)
         return ""
 
+    @staticmethod
+    def _extract_overview(element) -> str:
+        selectors = [
+            ".property-content-info.property-content-info-attribute .property-content-info-text",
+            ".property-content-info-text.property-content-info-attribute",
+            ".details-item",
+            ".property-content-info",
+        ]
+        for selector in selectors:
+            nodes = element.select(selector)
+            texts = [n.get_text(" ", strip=True) for n in nodes if n.get_text(strip=True)]
+            if texts:
+                return " | ".join(texts)
+        return ""
+
     def _parse_items(self, html: str) -> List[HouseItem]:
         soup = BeautifulSoup(html, "html.parser")
         containers = soup.select("div.property")
@@ -256,6 +272,7 @@ class AnjukeScraper:
                     ".tags",
                 ],
             )
+            overview = self._extract_overview(c)
             price_text = self._extract_text(c, [".property-price", ".pro-price", ".price"])
             full_text = c.get_text(" ", strip=True)
             total, unit = self._extract_price_from_text(price_text)
@@ -277,6 +294,7 @@ class AnjukeScraper:
                         community=community,
                         district=district,
                         house_info=house_info,
+                        overview=overview,
                         area_sqm=area,
                         total_price_wan=total,
                         unit_price_yuan=unit,
@@ -404,19 +422,21 @@ class AppUI:
         table_frame = ttk.LabelFrame(self.root, text="结果预览")
         table_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=8)
 
-        columns = ("title", "community", "district", "house_info", "area", "total", "unit")
+        columns = ("title", "community", "district", "house_info", "overview", "area", "total", "unit")
         self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=12)
         self.tree.heading("title", text="标题")
         self.tree.heading("community", text="小区")
         self.tree.heading("district", text="区域")
         self.tree.heading("house_info", text="房源信息")
+        self.tree.heading("overview", text="房源概况")
         self.tree.heading("area", text="面积(㎡)")
         self.tree.heading("total", text="总价(万)")
         self.tree.heading("unit", text="单价(元/平)")
         self.tree.column("title", width=220)
         self.tree.column("community", width=140)
         self.tree.column("district", width=130)
-        self.tree.column("house_info", width=210)
+        self.tree.column("house_info", width=180)
+        self.tree.column("overview", width=220)
         self.tree.column("area", width=90, anchor=tk.CENTER)
         self.tree.column("total", width=90, anchor=tk.CENTER)
         self.tree.column("unit", width=110, anchor=tk.CENTER)
@@ -482,6 +502,7 @@ class AppUI:
                     item.community,
                     item.district,
                     item.house_info,
+                    item.overview,
                     item.area_sqm,
                     item.total_price_wan,
                     item.unit_price_yuan,
@@ -497,6 +518,7 @@ class AppUI:
                     "community",
                     "district",
                     "house_info",
+                    "overview",
                     "area_sqm",
                     "total_price_wan",
                     "unit_price_yuan",
@@ -516,6 +538,7 @@ class AppUI:
             "community",
             "district",
             "house_info",
+            "overview",
             "area_sqm",
             "total_price_wan",
             "unit_price_yuan",
@@ -529,6 +552,7 @@ class AppUI:
                     item.community,
                     item.district,
                     item.house_info,
+                    item.overview,
                     item.area_sqm,
                     item.total_price_wan,
                     item.unit_price_yuan,
