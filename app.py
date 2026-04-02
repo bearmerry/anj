@@ -249,6 +249,8 @@ class AnjukeScraper:
 
         wanted_labels = ("发布人", "佣金", "房产公司")
         excluded_labels = ("户型",)
+        fallback_text = element.get_text(" ", strip=True)
+        normalized = re.sub(r"\s+", " ", fallback_text)
 
         for selector in selectors:
             nodes = element.select(selector)
@@ -263,19 +265,41 @@ class AnjukeScraper:
                         continue
                     if any(label in seg for label in wanted_labels):
                         texts.append(seg)
+                    elif "佣金" in seg:
+                        # 兼容「佣金≤1.0%」这类无冒号格式
+                        commission_match = re.search(r"佣金\s*[：:]?\s*([≤<]?\s*\d+(?:\.\d+)?\s*%)", seg)
+                        if commission_match:
+                            texts.append(f"佣金：{commission_match.group(1).replace(' ', '')}")
             if texts:
                 return " | ".join(texts)
 
         # 回退：有些页面不按分段展示，而是整块文本，使用正则提取指定字段
-        fallback_text = element.get_text(" ", strip=True)
-        normalized = re.sub(r"\s+", " ", fallback_text)
         extracted = []
-        for label in wanted_labels:
-            # 例如：发布人: 张三 / 佣金：1.0% / 房产公司：某某地产
-            pattern = rf"{label}\s*[：:]\s*([^|｜/，,。;；]+)"
-            match = re.search(pattern, normalized)
-            if match:
-                extracted.append(f"{label}：{match.group(1).strip()}")
+        publisher_match = re.search(r"发布人\s*[：:]?\s*([\u4e00-\u9fa5A-Za-z·]{2,20})", normalized)
+        if not publisher_match:
+            # 兼容「王建丽 4.8分」这类展示
+            publisher_match = re.search(r"([\u4e00-\u9fa5A-Za-z·]{2,20})\s*\d(?:\.\d)?\s*分", normalized)
+        if publisher_match:
+            extracted.append(f"发布人：{publisher_match.group(1).strip()}")
+
+        commission_match = re.search(r"佣金\s*[：:]?\s*([≤<]?\s*\d+(?:\.\d+)?\s*%)", normalized)
+        if commission_match:
+            extracted.append(f"佣金：{commission_match.group(1).replace(' ', '')}")
+
+        company_match = re.search(r"房产公司\s*[：:]?\s*([^|｜/，,。;；]+)", normalized)
+        company_name = ""
+        if company_match:
+            company_name = company_match.group(1).strip()
+        else:
+            company_candidates = re.findall(
+                r"([\u4e00-\u9fa5A-Za-z0-9·（）()\-]{4,}(?:不动产|地产|置业|中介)[\u4e00-\u9fa5A-Za-z0-9·（）()\-]{0,30}(?:店)?)",
+                normalized,
+            )
+            if company_candidates:
+                company_name = max(company_candidates, key=len).strip()
+        if company_name:
+            extracted.append(f"房产公司：{company_name}")
+
         if extracted:
             return " | ".join(extracted)
         return ""
