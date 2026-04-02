@@ -244,9 +244,23 @@ class AnjukeScraper:
             ".details-item",
             ".property-content-info",
         ]
+
+        wanted_labels = ("发布人", "佣金", "房产公司")
+        excluded_labels = ("户型",)
+
         for selector in selectors:
             nodes = element.select(selector)
-            texts = [n.get_text(" ", strip=True) for n in nodes if n.get_text(strip=True)]
+            texts = []
+            for n in nodes:
+                text = n.get_text(" ", strip=True)
+                if not text:
+                    continue
+                segments = [seg.strip() for seg in re.split(r"[|｜/]+", text) if seg.strip()]
+                for seg in segments or [text]:
+                    if any(label in seg for label in excluded_labels):
+                        continue
+                    if any(label in seg for label in wanted_labels):
+                        texts.append(seg)
             if texts:
                 return " | ".join(texts)
         return ""
